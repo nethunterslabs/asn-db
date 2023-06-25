@@ -417,7 +417,6 @@ impl From<ErrorContext<bincode::Error, &'static str>> for DbError {
 
 //TODO: Use eytzinger layout - requires non exact search support.
 //TODO: Support for mmap'ed files to reduce memory usage?
-//TODO: IPv6 support.
 //TODO: Support providing all subnets of matched range.
 /// ASN record database that is optimized for lookup by an IP address.
 #[derive(Serialize, Deserialize)]
@@ -438,19 +437,32 @@ impl fmt::Debug for Db {
 
 impl Db {
     /// Loads database from ASN data as provided by [IPtoASN](https://iptoasn.com/) - the only supported file format is of the `ip2asn-v4.tsv` and `ip2asn-v6.tsv` files.
-    pub fn from_tsv(ipv4_tsv: impl Read, ipv6_tsv: impl Read) -> Result<Db, DbError> {
-        let mut rdr = csv::ReaderBuilder::new()
-            .delimiter(b'\t')
-            .has_headers(false)
-            .from_reader(ipv4_tsv);
-        let mut ipv4_records = read_asn_v4_tsv(&mut rdr).collect::<Result<Vec<_>, _>>()?;
-        ipv4_records.sort();
-        let mut rdr = csv::ReaderBuilder::new()
-            .delimiter(b'\t')
-            .has_headers(false)
-            .from_reader(ipv6_tsv);
-        let mut ipv6_records = read_asn_v6_tsv(&mut rdr).collect::<Result<Vec<_>, _>>()?;
-        ipv6_records.sort();
+    pub fn from_tsv(
+        ipv4_tsv: Option<impl Read>,
+        ipv6_tsv: Option<impl Read>,
+    ) -> Result<Db, DbError> {
+        let ipv4_records = if let Some(ipv4_tsv) = ipv4_tsv {
+            let mut rdr = csv::ReaderBuilder::new()
+                .delimiter(b'\t')
+                .has_headers(false)
+                .from_reader(ipv4_tsv);
+            let mut ipv4_records = read_asn_v4_tsv(&mut rdr).collect::<Result<Vec<_>, _>>()?;
+            ipv4_records.sort();
+            ipv4_records
+        } else {
+            Vec::new()
+        };
+        let ipv6_records = if let Some(ipv6_tsv) = ipv6_tsv {
+            let mut rdr = csv::ReaderBuilder::new()
+                .delimiter(b'\t')
+                .has_headers(false)
+                .from_reader(ipv6_tsv);
+            let mut ipv6_records = read_asn_v6_tsv(&mut rdr).collect::<Result<Vec<_>, _>>()?;
+            ipv6_records.sort();
+            ipv6_records
+        } else {
+            Vec::new()
+        };
         Ok(Db {
             ipv4_records,
             ipv6_records,
@@ -475,9 +487,7 @@ impl Db {
             return Err(DbError::DbDataError("unsuported database version"));
         }
 
-        let records: Db = deserialize_from(db_data).wrap_error_while("reading bincode DB file")?;
-
-        Ok(records)
+        Ok(deserialize_from(db_data).wrap_error_while("reading bincode DB file")?)
     }
 
     /// Stores database as a binary index for fast loading with `.load()`.
@@ -551,8 +561,8 @@ mod tests {
     #[test]
     fn test_db() {
         let db = Db::from_tsv(
-            BufReader::new(File::open("ip2asn-v4.tsv").unwrap()),
-            BufReader::new(File::open("ip2asn-v6.tsv").unwrap()),
+            Some(BufReader::new(File::open("ip2asn-v4.tsv").unwrap())),
+            Some(BufReader::new(File::open("ip2asn-v6.tsv").unwrap())),
         )
         .unwrap();
 
