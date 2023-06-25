@@ -130,7 +130,7 @@ fn bench_lookup_list(c: &mut Criterion) {
             b.iter(|| {
                 assert!(
                     ips.iter()
-                        .map(|ip| db.lookup(*ip).unwrap())
+                        .map(|ip| db.lookup_ipv4(*ip).unwrap())
                         .map(|r| r.as_number)
                         .sum::<u32>()
                         > 0
@@ -159,7 +159,7 @@ fn bench_lookup_random(c: &mut Criterion) {
         Benchmark::new("lookup - random", move |b| {
             b.iter(|| {
                 ips.iter()
-                    .map(|ip| db.lookup(*ip).map(|r| r.as_number).unwrap_or(0))
+                    .map(|ip| db.lookup_ipv4(*ip).map(|r| r.as_number).unwrap_or(0))
                     .sum::<u32>()
             })
         })

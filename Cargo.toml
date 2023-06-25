@@ -10,18 +10,18 @@ readme = "README.md"
 keywords = ["asn", "ip", "database"]
 categories = ["database", "network-programming"]
 license = "MIT"
-edition = "2018"
+edition = "2021"
 
 [dependencies]
-ipnet = "2.0.0"
-bincode = "1.0.1"
-csv = "1.0.5"
-error-context = "0.1.0"
-serde = { version = "1.0.106", features = ["derive"] }
+ipnet = "2.7.2"
+bincode = "1.3.3"
+csv = "1.2.2"
+error-context = "0.1.2"
+serde = { version = "1.0.164", features = ["derive"] }
 
 [dev-dependencies]
-criterion = "0.2.9"
-tempfile = "3.0.7"
+criterion = "0.2.11"
+tempfile = "3.6.0"
 rand = "0.6.5"
 
 [[bench]]

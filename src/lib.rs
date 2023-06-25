@@ -46,24 +46,26 @@ Use `db.lookup(ip)` to lookup for matching record by an IP address.
 [ASN]: https://en.wikipedia.org/wiki/Autonomous_system_%28Internet%29#Assignment
 [IPtoASN]: https://iptoasn.com/
 */
-use bincode::{deserialize_from, serialize_into};
-use error_context::*;
-pub use ipnet::Ipv4Net;
-use ipnet::Ipv4Subnets;
-use serde::{Deserialize, Serialize};
 use std::cmp::Ordering;
 use std::error::Error;
 use std::fmt;
 use std::io;
 use std::io::{Read, Write};
-pub use std::net::Ipv4Addr;
+pub use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
+
+use bincode::{deserialize_from, serialize_into};
+use error_context::*;
+use ipnet::Ipv4Subnets;
+use ipnet::Ipv6Subnets;
+pub use ipnet::{IpNet, Ipv4Net, Ipv6Net};
+use serde::{Deserialize, Serialize};
 
 const DATABASE_DATA_TAG: &[u8; 4] = b"ASDB";
 const DATABASE_DATA_VERSION: &[u8; 4] = b"bin1";
 
 /// Autonomous System number record.
 #[derive(Serialize, Deserialize, Debug, Clone, Eq)]
-pub struct Record {
+pub struct Recordv4 {
     /// Network base IP address (host byte order).
     pub ip: u32,
     /// Network mask prefix in number of bits, e.g. 24 for 255.255.255.0 mask.
@@ -76,28 +78,123 @@ pub struct Record {
     pub owner: String,
 }
 
-impl PartialEq for Record {
-    fn eq(&self, other: &Record) -> bool {
+impl PartialEq for Recordv4 {
+    fn eq(&self, other: &Recordv4) -> bool {
         self.ip == other.ip
     }
 }
 
-impl Ord for Record {
-    fn cmp(&self, other: &Record) -> Ordering {
+impl Ord for Recordv4 {
+    fn cmp(&self, other: &Recordv4) -> Ordering {
         self.ip.cmp(&other.ip)
     }
 }
 
-impl PartialOrd for Record {
-    fn partial_cmp(&self, other: &Record) -> Option<Ordering> {
+impl PartialOrd for Recordv4 {
+    fn partial_cmp(&self, other: &Recordv4) -> Option<Ordering> {
         Some(self.cmp(other))
     }
 }
 
-impl Record {
+impl Recordv4 {
     /// Gets `Ipv4Net` representation of the network address.
     pub fn network(&self) -> Ipv4Net {
         Ipv4Net::new(self.ip.into(), self.prefix_len).expect("bad network")
+    }
+}
+
+/// Autonomous System number record.
+#[derive(Serialize, Deserialize, Debug, Clone, Eq)]
+pub struct Recordv6 {
+    /// Network base IP address (host byte order).
+    pub ip: u128,
+    /// Network mask prefix in number of bits, e.g. 24 for 255.255.255.0 mask.
+    pub prefix_len: u8,
+    /// Assigned AS number.
+    pub as_number: u32,
+    /// Country code of network owner.
+    pub country: String,
+    /// Network owner information.
+    pub owner: String,
+}
+
+impl PartialEq for Recordv6 {
+    fn eq(&self, other: &Recordv6) -> bool {
+        self.ip == other.ip
+    }
+}
+
+impl Ord for Recordv6 {
+    fn cmp(&self, other: &Recordv6) -> Ordering {
+        self.ip.cmp(&other.ip)
+    }
+}
+
+impl PartialOrd for Recordv6 {
+    fn partial_cmp(&self, other: &Recordv6) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Recordv6 {
+    /// Gets `Ipv4Net` representation of the network address.
+    pub fn network(&self) -> Ipv6Net {
+        Ipv6Net::new(self.ip.into(), self.prefix_len).expect("bad network")
+    }
+}
+
+pub enum Record<'a> {
+    V4(&'a Recordv4),
+    V6(&'a Recordv6),
+}
+
+impl Record<'_> {
+    /// Gets `IpNet` representation of the network address.
+    pub fn network(&self) -> IpNet {
+        match self {
+            Record::V4(record) => IpNet::V4(record.network()),
+            Record::V6(record) => IpNet::V6(record.network()),
+        }
+    }
+
+    /// Gets `IpAddr` representation of the network address.
+    pub fn ip(&self) -> IpAddr {
+        match self {
+            Record::V4(record) => IpAddr::V4(record.network().network()),
+            Record::V6(record) => IpAddr::V6(record.network().network()),
+        }
+    }
+
+    /// Gets network mask prefix in number of bits, e.g. 24 for
+    pub fn prefix_len(&self) -> u8 {
+        match self {
+            Record::V4(record) => record.prefix_len,
+            Record::V6(record) => record.prefix_len,
+        }
+    }
+
+    /// Gets assigned AS number.
+    pub fn as_number(&self) -> u32 {
+        match self {
+            Record::V4(record) => record.as_number,
+            Record::V6(record) => record.as_number,
+        }
+    }
+
+    /// Gets country code of network owner.
+    pub fn country(&self) -> &str {
+        match self {
+            Record::V4(record) => &record.country,
+            Record::V6(record) => &record.country,
+        }
+    }
+
+    /// Gets network owner information.
+    pub fn owner(&self) -> &str {
+        match self {
+            Record::V4(record) => &record.owner,
+            Record::V6(record) => &record.owner,
+        }
     }
 }
 
@@ -151,9 +248,9 @@ impl From<ErrorContext<std::num::ParseIntError, &'static str>> for TsvParseError
 }
 
 /// Reads ASN database TSV file (`ip2asn-v4.tsv` format) provided by [IPtoASN](https://iptoasn.com/) as iterator of `Record`s.
-pub fn read_asn_tsv<'d, R: io::Read>(
-    data: &'d mut csv::Reader<R>,
-) -> impl Iterator<Item = Result<Record, TsvParseError>> + 'd {
+pub fn read_asn_v4_tsv<R: io::Read>(
+    data: &mut csv::Reader<R>,
+) -> impl Iterator<Item = Result<Recordv4, TsvParseError>> + '_ {
     data.records()
         .filter(|record| {
             if let Ok(record) = record {
@@ -180,7 +277,7 @@ pub fn read_asn_tsv<'d, R: io::Read>(
         .map(|record| {
             record.map(|(range_start, range_end, as_number, country, owner)| {
                 // Convert range into one or more subnets iterator
-                Ipv4Subnets::new(range_start, range_end, 8).map(move |subnet| Record {
+                Ipv4Subnets::new(range_start, range_end, 8).map(move |subnet| Recordv4 {
                     ip: subnet.network().into(),
                     prefix_len: subnet.prefix_len(),
                     country: country.clone(),
@@ -196,7 +293,64 @@ pub fn read_asn_tsv<'d, R: io::Read>(
 
             match subnet_records {
                 Ok(subnet_records) => records = Some(subnet_records),
-                Err(err) => error = Some(TsvParseError::from(err)),
+                Err(err) => error = Some(err),
+            }
+
+            records
+                .into_iter()
+                .flatten()
+                .map(Ok)
+                .chain(error.into_iter().map(Err))
+        })
+}
+
+/// Reads ASN database TSV file (`ip2asn-v4.tsv` format) provided by [IPtoASN](https://iptoasn.com/) as iterator of `Record`s.
+pub fn read_asn_v6_tsv<R: io::Read>(
+    data: &mut csv::Reader<R>,
+) -> impl Iterator<Item = Result<Recordv6, TsvParseError>> + '_ {
+    data.records()
+        .filter(|record| {
+            if let Ok(record) = record {
+                let owner = &record[4];
+                !(owner == "Not routed" || owner == "None")
+            } else {
+                true
+            }
+        })
+        .map(|record| record.map_err(Into::<TsvParseError>::into))
+        .map(|record| {
+            record.and_then(|record| {
+                let range_start: Ipv6Addr = record[0]
+                    .parse()
+                    .wrap_error_while("parsing range_start IP")?;
+                let range_end: Ipv6Addr =
+                    record[1].parse().wrap_error_while("parsing range_end IP")?;
+                let as_number: u32 = record[2].parse().wrap_error_while("parsing as_number")?;
+                let country = record[3].to_owned();
+                let owner = record[4].to_owned();
+                Ok((range_start, range_end, as_number, country, owner))
+            })
+        })
+        .map(|record| {
+            record.map(|(range_start, range_end, as_number, country, owner)| {
+                // Convert range into one or more subnets iterator
+                Ipv6Subnets::new(range_start, range_end, 8).map(move |subnet| Recordv6 {
+                    ip: subnet.network().into(),
+                    prefix_len: subnet.prefix_len(),
+                    country: country.clone(),
+                    as_number,
+                    owner: owner.clone(),
+                })
+            })
+        })
+        .flat_map(|subnet_records| {
+            // Flatten many records or single error
+            let mut records = None;
+            let mut error = None;
+
+            match subnet_records {
+                Ok(subnet_records) => records = Some(subnet_records),
+                Err(err) => error = Some(err),
             }
 
             records
@@ -266,24 +420,41 @@ impl From<ErrorContext<bincode::Error, &'static str>> for DbError {
 //TODO: IPv6 support.
 //TODO: Support providing all subnets of matched range.
 /// ASN record database that is optimized for lookup by an IP address.
-pub struct Db(Vec<Record>);
+#[derive(Serialize, Deserialize)]
+pub struct Db {
+    ipv4_records: Vec<Recordv4>,
+    ipv6_records: Vec<Recordv6>,
+}
 
 impl fmt::Debug for Db {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "asn_db::Db[total records: {}]", self.0.len())
+        write!(
+            f,
+            "asn_db::Db[total records: {}]",
+            self.ipv4_records.len() + self.ipv6_records.len()
+        )
     }
 }
 
 impl Db {
-    /// Loads database from ASN data as provided by [IPtoASN](https://iptoasn.com/) - the only supported file format is of `ip2asn-v4.tsv` file.
-    pub fn form_tsv(data: impl Read) -> Result<Db, DbError> {
+    /// Loads database from ASN data as provided by [IPtoASN](https://iptoasn.com/) - the only supported file format is of the `ip2asn-v4.tsv` and `ip2asn-v6.tsv` files.
+    pub fn from_tsv(ipv4_tsv: impl Read, ipv6_tsv: impl Read) -> Result<Db, DbError> {
         let mut rdr = csv::ReaderBuilder::new()
             .delimiter(b'\t')
             .has_headers(false)
-            .from_reader(data);
-        let mut records = read_asn_tsv(&mut rdr).collect::<Result<Vec<_>, _>>()?;
-        records.sort();
-        Ok(Db(records))
+            .from_reader(ipv4_tsv);
+        let mut ipv4_records = read_asn_v4_tsv(&mut rdr).collect::<Result<Vec<_>, _>>()?;
+        ipv4_records.sort();
+        let mut rdr = csv::ReaderBuilder::new()
+            .delimiter(b'\t')
+            .has_headers(false)
+            .from_reader(ipv6_tsv);
+        let mut ipv6_records = read_asn_v6_tsv(&mut rdr).collect::<Result<Vec<_>, _>>()?;
+        ipv6_records.sort();
+        Ok(Db {
+            ipv4_records,
+            ipv6_records,
+        })
     }
 
     /// Loads database from the binary index that was stored with `.store()` - this method is much faster than loading from the TSV file.
@@ -304,10 +475,9 @@ impl Db {
             return Err(DbError::DbDataError("unsuported database version"));
         }
 
-        let records: Vec<Record> =
-            deserialize_from(db_data).wrap_error_while("reading bincode DB file")?;
+        let records: Db = deserialize_from(db_data).wrap_error_while("reading bincode DB file")?;
 
-        Ok(Db(records))
+        Ok(records)
     }
 
     /// Stores database as a binary index for fast loading with `.load()`.
@@ -318,18 +488,49 @@ impl Db {
         db_data
             .write(DATABASE_DATA_VERSION)
             .wrap_error_while("error writing version")?;
-        serialize_into(db_data, &self.0).wrap_error_while("stroing DB")?;
+        serialize_into(db_data, &self).wrap_error_while("stroing DB")?;
         Ok(())
     }
 
     /// Performs lookup by an IP address for the ASN `Record` of which network this IP belongs to.
-    pub fn lookup(&self, ip: Ipv4Addr) -> Option<&Record> {
-        match self.0.binary_search_by_key(&ip.into(), |record| record.ip) {
-            Ok(index) => return Some(&self.0[index]), // IP was network base IP
+    pub fn lookup(&self, ip: IpAddr) -> Option<Record> {
+        match ip {
+            IpAddr::V4(ip) => self.lookup_ipv4(ip).map(Record::V4),
+            IpAddr::V6(ip) => self.lookup_ipv6(ip).map(Record::V6),
+        }
+    }
+
+    /// Performs lookup by an IPv4 address for the ASN `Record` of which network this IP belongs to.
+    pub fn lookup_ipv4(&self, ip: Ipv4Addr) -> Option<&Recordv4> {
+        match self
+            .ipv4_records
+            .binary_search_by_key(&ip.into(), |record| record.ip)
+        {
+            Ok(index) => return Some(&self.ipv4_records[index]), // IP was network base IP
             Err(index) => {
                 // upper bound/insert index
                 if index != 0 {
-                    let record = &self.0[index - 1];
+                    let record = &self.ipv4_records[index - 1];
+                    if record.network().contains(&ip) {
+                        return Some(record);
+                    }
+                }
+            }
+        }
+        None
+    }
+
+    /// Performs lookup by an IPv6 address for the ASN `Record` of which network this IP belongs to.
+    pub fn lookup_ipv6(&self, ip: Ipv6Addr) -> Option<&Recordv6> {
+        match self
+            .ipv6_records
+            .binary_search_by_key(&ip.into(), |record| record.ip)
+        {
+            Ok(index) => return Some(&self.ipv6_records[index]), // IP was network base IP
+            Err(index) => {
+                // upper bound/insert index
+                if index != 0 {
+                    let record = &self.ipv6_records[index - 1];
                     if record.network().contains(&ip) {
                         return Some(record);
                     }
@@ -349,30 +550,44 @@ mod tests {
 
     #[test]
     fn test_db() {
-        let db = Db::form_tsv(BufReader::new(File::open("ip2asn-v4.tsv").unwrap())).unwrap();
+        let db = Db::from_tsv(
+            BufReader::new(File::open("ip2asn-v4.tsv").unwrap()),
+            BufReader::new(File::open("ip2asn-v6.tsv").unwrap()),
+        )
+        .unwrap();
 
         assert!(db
-            .lookup("1.1.1.0".parse().unwrap())
+            .lookup_ipv4("1.1.1.0".parse().unwrap())
             .unwrap()
             .owner
             .contains("CLOUDFLARENET"));
         assert!(db
-            .lookup("1.1.1.1".parse().unwrap())
-            .unwrap()
-            .owner
-            .contains("CSTNET-AS-AP Computer Network Information Center"));
-        assert!(db
-            .lookup("1.1.1.2".parse().unwrap())
+            .lookup_ipv4("1.1.1.1".parse().unwrap())
             .unwrap()
             .owner
             .contains("CLOUDFLARENET"));
         assert!(db
-            .lookup("8.8.8.8".parse().unwrap())
+            .lookup_ipv4("1.1.1.2".parse().unwrap())
+            .unwrap()
+            .owner
+            .contains("CLOUDFLARENET"));
+        assert!(db
+            .lookup_ipv4("8.8.8.8".parse().unwrap())
             .unwrap()
             .owner
             .contains("GOOGLE"));
         assert!(db
-            .lookup("8.8.4.4".parse().unwrap())
+            .lookup_ipv4("8.8.4.4".parse().unwrap())
+            .unwrap()
+            .owner
+            .contains("GOOGLE"));
+        assert!(db
+            .lookup_ipv6("2001:4860:4860::8888".parse().unwrap())
+            .unwrap()
+            .owner
+            .contains("GOOGLE"));
+        assert!(db
+            .lookup_ipv6("2001:4860:4860::8844".parse().unwrap())
             .unwrap()
             .owner
             .contains("GOOGLE"));
@@ -389,27 +604,37 @@ mod tests {
         drop(temp_dir);
 
         assert!(db
-            .lookup("1.1.1.0".parse().unwrap())
+            .lookup_ipv4("1.1.1.0".parse().unwrap())
             .unwrap()
             .owner
             .contains("CLOUDFLARENET"));
         assert!(db
-            .lookup("1.1.1.1".parse().unwrap())
-            .unwrap()
-            .owner
-            .contains("CSTNET-AS-AP Computer Network Information Center"));
-        assert!(db
-            .lookup("1.1.1.2".parse().unwrap())
+            .lookup_ipv4("1.1.1.1".parse().unwrap())
             .unwrap()
             .owner
             .contains("CLOUDFLARENET"));
         assert!(db
-            .lookup("8.8.8.8".parse().unwrap())
+            .lookup_ipv4("1.1.1.2".parse().unwrap())
+            .unwrap()
+            .owner
+            .contains("CLOUDFLARENET"));
+        assert!(db
+            .lookup_ipv4("8.8.8.8".parse().unwrap())
             .unwrap()
             .owner
             .contains("GOOGLE"));
         assert!(db
-            .lookup("8.8.4.4".parse().unwrap())
+            .lookup_ipv4("8.8.4.4".parse().unwrap())
+            .unwrap()
+            .owner
+            .contains("GOOGLE"));
+        assert!(db
+            .lookup_ipv6("2001:4860:4860::8888".parse().unwrap())
+            .unwrap()
+            .owner
+            .contains("GOOGLE"));
+        assert!(db
+            .lookup_ipv6("2001:4860:4860::8844".parse().unwrap())
             .unwrap()
             .owner
             .contains("GOOGLE"));
