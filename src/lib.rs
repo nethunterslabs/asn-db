@@ -16,7 +16,10 @@ use asn_db::Db;
 use std::fs::File;
 use std::io::BufReader;
 
-let db = Db::form_tsv(BufReader::new(File::open("ip2asn-v4.tsv").unwrap())).unwrap();
+let db = Db::from_tsv(
+    Some(BufReader::new(File::open("ip2asn-v4.tsv").unwrap())),
+    None,
+).unwrap();
 let record = db.lookup("1.1.1.1".parse().unwrap()).unwrap();
 
 println!("{:#?}", record);
@@ -26,13 +29,15 @@ println!("{:#?}", record.network());
 This prints:
 
 ```noformat
-Record {
-    ip: 16843008,
-    prefix_len: 24,
-    as_number: 13335,
-    country: "US",
-    owner: "CLOUDFLARENET - Cloudflare, Inc."
-}
+Record(
+    Recordv4 {
+        ip: 16843008,
+        prefix_len: 24,
+        as_number: 13335,
+        country: "US",
+        owner: "CLOUDFLARENET - Cloudflare, Inc."
+    }
+)
 1.1.1.0/24
 ```
 
@@ -143,6 +148,7 @@ impl Recordv6 {
     }
 }
 
+#[derive(Debug, Clone, Eq, PartialEq, PartialOrd)]
 pub enum Record<'a> {
     V4(&'a Recordv4),
     V6(&'a Recordv6),
